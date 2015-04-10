@@ -231,6 +231,22 @@ namespace JsonConfig
 			return true;
 		}
 		#endregion
+
+        #region operator +
+        public static dynamic operator +(ConfigObject a, ConfigObject b)
+        {
+            return Merger.Merge(b, a);
+        }
+        public static dynamic operator +(dynamic a, ConfigObject b)
+        {
+            return Merger.Merge(b, a);
+        }
+
+        public static dynamic operator +(ConfigObject a, dynamic b)
+        {
+            return Merger.Merge(b, a);
+        }
+        #endregion
 	}
 
 	/// <summary>
