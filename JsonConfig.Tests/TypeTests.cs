@@ -80,19 +80,19 @@ namespace JsonConfig.Tests
 		[Test]
 		public void CastNonExistantFields ()
 		{
-			int x = Config.Global.NonExistant;
+			int x = Config.Global.User.NonExistant;
 			Assert.AreEqual (0, x);
 
-			int[] xarray = Config.Global.NonExistant;
+            int[] xarray = Config.Global.User.NonExistant;
 			Assert.AreEqual (0, xarray.Length);
 
-			string[] sarray = Config.Global.NonExistant;
+            string[] sarray = Config.Global.User.NonExistant;
 			Assert.AreEqual (0, sarray.Length);
 
-			bool b = Config.Global.NonExistant;
+            bool b = Config.Global.User.NonExistant;
 			Assert.AreEqual (false, b);
 
-			bool? bn = Config.Global.NonExistant;
+            bool? bn = Config.Global.User.NonExistant;
 			Assert.AreEqual (null, bn);
 		}
 		[Test]

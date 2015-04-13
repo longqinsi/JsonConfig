@@ -11,7 +11,7 @@ namespace JsonConfig.Tests
 	{
 		private string configFolder ()
 		{
-			return Directory.GetCurrentDirectory () + "/../../DirectoryMerge/";
+			return Path.Combine(Directory.GetCurrentDirectory (), "DirectoryMerge");
 		}
 		[Test()]
 		public void AllArraysFoundAndMerged()
