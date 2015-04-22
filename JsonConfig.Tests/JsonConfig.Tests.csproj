@@ -107,6 +107,9 @@
     <None Include="DirectoryMerge\EvenMoreFruits\EvenEvenMoreFruits\File.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="JsonConfig.Tests.conf.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
