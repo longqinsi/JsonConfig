@@ -64,7 +64,9 @@ namespace JsonConfig
         private FileInfo _userConfigFileInfo;
         private FileSystemWatcher _userConfigWatcher;
 
-        private Config(Assembly callingAssembly = null)
+        private readonly Assembly _assemblyToConfig;
+
+        private Config(Assembly assemblyToConfig = null)
         {
             // run to check for compiled/embedded config
 
@@ -72,9 +74,11 @@ namespace JsonConfig
             // giving the entry assembly top priority in merge
             var entryAssembly = Assembly.GetEntryAssembly();
 
-            if (callingAssembly != null)
+            _assemblyToConfig = assemblyToConfig;
+
+            if (assemblyToConfig != null)
             {
-                _default = GetDefaultConfig(callingAssembly);
+                _default = GetDefaultConfig(assemblyToConfig);
             }
             else
             {
@@ -83,50 +87,7 @@ namespace JsonConfig
 
 
             // User config (provided through a settings.conf file for Global config or a [AssemblyName].conf for Local config)
-            var userConfigFilename = callingAssembly == null ? "settings" : callingAssembly.GetName().Name;
-            var getUserConfigFileInfo = (Func<string, FileInfo>)(searchDirectory =>
-                !string.IsNullOrWhiteSpace(searchDirectory) && Directory.Exists(searchDirectory) ?
-                (from FileInfo fi in new DirectoryInfo(searchDirectory).GetFiles()
-                 where (
-                     fi.FullName.EndsWith(userConfigFilename + ".conf") ||
-                     fi.FullName.EndsWith(userConfigFilename + ".json") ||
-                     fi.FullName.EndsWith(userConfigFilename + ".conf.json") ||
-                     fi.FullName.EndsWith(userConfigFilename + ".json.conf")
-                     )
-                 select fi).FirstOrDefault() : null);
-            FileInfo userConfigFileInfo = null;
-
-            if (callingAssembly == null)
-            {
-                var searchDirectoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AppDomain.CurrentDomain.RelativeSearchPath ?? "");
-                userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath);
-            }
-            else
-            {
-                if (!string.IsNullOrWhiteSpace(callingAssembly.CodeBase) && callingAssembly.CodeBase.StartsWith("file:///"))
-                {
-                    var searchDirectoryPath = Path.GetDirectoryName(
-                        callingAssembly.CodeBase.Substring("file:///".Length).Replace(Path.DirectorySeparatorChar, '\\'));
-
-                    userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath);
-                }
-                if (userConfigFileInfo == null)
-                {
-                    if (!string.IsNullOrWhiteSpace(callingAssembly.Location))
-                    {
-                        var searchDirectoryPath = Path.GetDirectoryName(
-                            callingAssembly.Location);
-
-                        userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath);
-                    }
-                }
-                if (userConfigFileInfo == null)
-                {
-                    var searchDirectoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AppDomain.CurrentDomain.RelativeSearchPath ?? "");
-                    userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath);
-                }
-                
-            }
+            var userConfigFileInfo = GetUserConfigFileInfo(true);
 
             if (userConfigFileInfo != null)
             {
@@ -134,8 +95,60 @@ namespace JsonConfig
             }
             else
             {
-                _user = _default.Clone();
+                _user = _default + new ConfigObject();
             }
+        }
+
+        private FileInfo GetUserConfigFileInfo(bool isCheckFileExists)
+        {
+            var userConfigFilename = _assemblyToConfig == null ? "settings" : _assemblyToConfig.GetName().Name;
+            var getUserConfigFileInfo = (Func<string, bool, FileInfo>)((searchDirectory, checkFileExists) =>
+                !string.IsNullOrWhiteSpace(searchDirectory) && Directory.Exists(searchDirectory)
+                    ? (checkFileExists
+                        ? (from FileInfo fi in new DirectoryInfo(searchDirectory).GetFiles()
+                           where (
+                               fi.FullName.EndsWith(userConfigFilename + ".conf") ||
+                               fi.FullName.EndsWith(userConfigFilename + ".json") ||
+                               fi.FullName.EndsWith(userConfigFilename + ".conf.json") ||
+                               fi.FullName.EndsWith(userConfigFilename + ".json.conf")
+                               )
+                           select fi).FirstOrDefault()
+                        : new FileInfo(Path.Combine(searchDirectory, userConfigFilename + DefaultEnding)))
+                    : null);
+            FileInfo userConfigFileInfo = null;
+            if (_assemblyToConfig == null)
+            {
+                var searchDirectoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    AppDomain.CurrentDomain.RelativeSearchPath ?? "");
+                userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath, isCheckFileExists);
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(_assemblyToConfig.CodeBase) && _assemblyToConfig.CodeBase.StartsWith("file:///"))
+                {
+                    var searchDirectoryPath = Path.GetDirectoryName(
+                        _assemblyToConfig.CodeBase.Substring("file:///".Length).Replace(Path.DirectorySeparatorChar, '\\'));
+
+                    userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath, isCheckFileExists);
+                }
+                if (userConfigFileInfo == null)
+                {
+                    if (!string.IsNullOrWhiteSpace(_assemblyToConfig.Location))
+                    {
+                        var searchDirectoryPath = Path.GetDirectoryName(
+                            _assemblyToConfig.Location);
+
+                        userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath, isCheckFileExists);
+                    }
+                }
+                if (userConfigFileInfo == null)
+                {
+                    var searchDirectoryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                        AppDomain.CurrentDomain.RelativeSearchPath ?? "");
+                    userConfigFileInfo = getUserConfigFileInfo(searchDirectoryPath, isCheckFileExists);
+                }
+            }
+            return userConfigFileInfo;
         }
 
         /// <summary>
@@ -181,7 +194,7 @@ namespace JsonConfig
                 }
                 else
                 {
-                    _user = _default.Clone();
+                    _user = _default + new ConfigObject();
                 }
             }
         }
@@ -206,10 +219,7 @@ namespace JsonConfig
             _readerWriterLockSlim.EnterReadLock();
             try
             {
-                if (_user is NullExceptionPreventer)
-                    return new ConfigObject();
-                else
-                    return _user.Clone();
+                return _user.Clone();
             }
             finally
             {
@@ -225,9 +235,22 @@ namespace JsonConfig
         /// <param name="info">The given json file.</param>
         public void SetAndWatchUserConfig(FileInfo info)
         {
+            SetAndWatchUserConfigInternal(info, false);
+        }
+
+        /// <summary>
+        ///     Read <see cref="_user" /> from the given json file, and watch the file for change.
+        /// </summary>
+        /// <param name="info">The given json file.</param>
+        /// <param name="hasWriteLock">Whether the current thread holds the writer lock of _readerWriterLockSlim.</param>
+        private void SetAndWatchUserConfigInternal(FileInfo info, bool hasWriteLock)
+        {
             if (info == null || info.Directory == null) return;
 
-            _readerWriterLockSlim.EnterWriteLock();
+            if (!hasWriteLock)
+            {
+                _readerWriterLockSlim.EnterWriteLock();
+            }
 
             try
             {
@@ -253,26 +276,7 @@ namespace JsonConfig
                 {
                     NotifyFilter = NotifyFilters.LastWrite
                 };
-                userConfigWatcher.Changed += delegate
-                {
-                    _readerWriterLockSlim.EnterWriteLock();
-                    try
-                    {
-                        _user = _default + ParseJson(File.ReadAllText(info.FullName));
-                        Debug.WriteLine("user configuration has changed, updating config information");
-
-                        // trigger our event
-                        var handler = OnUserConfigFileChanged;
-                        if (handler != null)
-                        {
-                            handler();
-                        }
-                    }
-                    finally
-                    {
-                        _readerWriterLockSlim.ExitWriteLock();
-                    }
-                };
+                userConfigWatcher.Changed += WatchUserConfig;
 
                 //Dispose previous User Config Watcher if exists.
                 if (_userConfigWatcher != null)
@@ -287,9 +291,57 @@ namespace JsonConfig
             }
             finally
             {
+                if (!hasWriteLock)
+                {
+                    _readerWriterLockSlim.ExitWriteLock();
+                }
+            }
+        }
+
+        private void WatchUserConfig(Object sender, FileSystemEventArgs e)
+        {
+            if (e == null || e.ChangeType != WatcherChangeTypes.Changed)
+            {
+                return;
+            }
+            _readerWriterLockSlim.EnterWriteLock();
+            try
+            {
+                _user = _default + ParseJson(File.ReadAllText(e.FullPath));
+                // trigger our event
+                var handler = OnUserConfigFileChanged;
+                if (handler != null)
+                {
+                    handler();
+                }
+            }
+            finally
+            {
                 _readerWriterLockSlim.ExitWriteLock();
             }
         }
+
+        internal void SuspendWatchUserConfig()
+        {
+            var userConfigWatcher = _userConfigWatcher;
+            if (userConfigWatcher != null)
+            {
+                userConfigWatcher.EnableRaisingEvents = false;
+                userConfigWatcher.Changed -= WatchUserConfig;
+            }
+        }
+
+        internal void ResumeWatchUserConfig()
+        {
+            var userConfigWatcher = _userConfigWatcher;
+            if (userConfigWatcher != null)
+            {
+                userConfigWatcher.EnableRaisingEvents = true;
+                userConfigWatcher.Changed += WatchUserConfig;
+            }
+        }
+
+
 
         public void Save()
         {
@@ -300,13 +352,15 @@ namespace JsonConfig
         {
             if (!hasLock)
             {
-                _readerWriterLockSlim.EnterReadLock();
+                _readerWriterLockSlim.EnterUpgradeableReadLock();
             }
             try
             {
+                bool newUserConfigFileCreated = false;
                 if (_userConfigFileInfo == null)
                 {
-                    return;
+                    _userConfigFileInfo = GetUserConfigFileInfo(false);
+                    newUserConfigFileCreated = true;
                 }
                 if (_userConfigWatcher != null)
                 {
@@ -318,12 +372,16 @@ namespace JsonConfig
                     ? configObject.GetJsonToSave()
                     : (_user ?? new ConfigObject()).ToString();
                 File.WriteAllText(_userConfigFileInfo.FullName, configString);
+                if (newUserConfigFileCreated)
+                {
+                    SetAndWatchUserConfigInternal(_userConfigFileInfo, hasLock);
+                }
             }
             finally
             {
                 if (!hasLock)
                 {
-                    _readerWriterLockSlim.ExitReadLock();
+                    _readerWriterLockSlim.ExitUpgradeableReadLock();
                 }
             }
         }
@@ -411,18 +469,6 @@ namespace JsonConfig
             try
             {
                 _user = _default + config;
-                if (_userConfigFileInfo != null)
-                {
-                    if (_userConfigWatcher != null)
-                    {
-                        _userConfigWatcher.EnableRaisingEvents = false;
-                    }
-                    SaveInternal(true);
-                    if (_userConfigWatcher != null)
-                    {
-                        _userConfigWatcher.EnableRaisingEvents = true;
-                    }
-                }
             }
             finally
             {
@@ -457,7 +503,8 @@ namespace JsonConfig
             var dconfResource =
                 res.FirstOrDefault(r => r.EndsWith("default.conf", StringComparison.OrdinalIgnoreCase) ||
                                         r.EndsWith("default.json", StringComparison.OrdinalIgnoreCase) ||
-                                        r.EndsWith("default.conf.json", StringComparison.OrdinalIgnoreCase));
+                                        r.EndsWith("default.conf.json", StringComparison.OrdinalIgnoreCase) ||
+                                        r.EndsWith("default.json.conf", StringComparison.OrdinalIgnoreCase));
 
             if (string.IsNullOrEmpty(dconfResource))
                 return null;

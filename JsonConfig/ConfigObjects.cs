@@ -21,25 +21,49 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
+using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Dynamic;
 using System.IO;
+using System.Linq;
 using JsonFx.Json;
 
 namespace JsonConfig
 {
     public class ConfigObject : DynamicObject, IDictionary<string, object>
     {
-        public readonly bool IsDefault;
-        internal Dictionary<string, bool> IsFromDefaultMap = new Dictionary<string, bool>();
-        internal Dictionary<string, object> Members = new Dictionary<string, object>();
+        private class ConfigObjectMember
+        {
+            public bool IsDefault
+            {
+                get { return _isDefault; }
+            }
+
+            public object Value
+            {
+                get { return _value; }
+            }
+
+            private readonly bool _isDefault;
+            private readonly object _value;
+
+            public ConfigObjectMember(bool isDefault, object value)
+            {
+                _isDefault = isDefault;
+                _value = value;
+            }
+        }
+
+        private readonly bool _isDefault;
+        private volatile ConcurrentDictionary<string, ConfigObjectMember> _members = new ConcurrentDictionary<string, ConfigObjectMember>();
 
         #region IEnumerable implementation
 
         public IEnumerator GetEnumerator()
         {
-            return Members.GetEnumerator();
+            return _members.GetEnumerator();
         }
 
         #endregion
@@ -48,7 +72,7 @@ namespace JsonConfig
 
         IEnumerator<KeyValuePair<string, object>> IEnumerable<KeyValuePair<string, object>>.GetEnumerator()
         {
-            return Members.GetEnumerator();
+            return _members.ToList().Select(a => new KeyValuePair<string, object>(a.Key, a.Value.Value)).GetEnumerator();
         }
 
         #endregion
@@ -57,7 +81,7 @@ namespace JsonConfig
         {
             var edict = e as IDictionary<string, object>;
             var c = new ConfigObject(isDefault);
-            var cdict = (IDictionary<string, object>) c;
+            var cdict = c._members;
 
             // this is not complete. It will, however work for JsonFX ExpandoObjects
             // which consits only of primitive types, ExpandoObject or ExpandoObject [] 
@@ -67,47 +91,43 @@ namespace JsonConfig
                 // recursively convert and add ExpandoObjects
                 if (kvp.Value is ExpandoObject)
                 {
-                    cdict.Add(kvp.Key, FromExpando((ExpandoObject) kvp.Value, isDefault));
+                    cdict.TryAdd(kvp.Key, new ConfigObjectMember(isDefault, FromExpando((ExpandoObject)kvp.Value, isDefault)));
                 }
                 else if (kvp.Value is ExpandoObject[])
                 {
                     var configObjects = new List<ConfigObject>();
-                    foreach (var ex in ((ExpandoObject[]) kvp.Value))
+                    foreach (var ex in ((ExpandoObject[])kvp.Value))
                     {
                         configObjects.Add(FromExpando(ex, isDefault));
                     }
-                    cdict.Add(kvp.Key, configObjects.ToArray());
+                    cdict.TryAdd(kvp.Key, new ConfigObjectMember(isDefault, configObjects.ToArray()));
                 }
                 else
                 {
-                    cdict.Add(kvp.Key, kvp.Value);
+                    cdict.TryAdd(kvp.Key, new ConfigObjectMember(isDefault, kvp.Value));
                 }
-                c.IsFromDefaultMap[kvp.Key] = isDefault;
             }
             return c;
         }
 
         public override bool TryGetMember(GetMemberBinder binder, out object result)
         {
-            if (Members.ContainsKey(binder.Name))
-                result = Members[binder.Name];
+            ConfigObjectMember member;
+            if (_members.TryGetValue(binder.Name, out member))
+            {
+                result = member.Value;
+            }
             else
-                result = new NullExceptionPreventer();
-
+            {
+                result = new ConfigObject(IsDefault);
+                _members[binder.Name] = new ConfigObjectMember(IsDefault, result);
+            }
             return true;
         }
 
         public override bool TrySetMember(SetMemberBinder binder, object value)
         {
-            if (Members.ContainsKey(binder.Name))
-            {
-                Members[binder.Name] = value;
-            }
-            else
-            {
-                Members.Add(binder.Name, value);
-            }
-            IsFromDefaultMap[binder.Name] = IsDefault;
+            _members[binder.Name] = new ConfigObjectMember(_isDefault, value);
             return true;
         }
 
@@ -116,12 +136,12 @@ namespace JsonConfig
             // some special methods that should be in our dynamic object
             if (binder.Name == "ApplyJsonFromFile" && args.Length == 1 && args[0] is string)
             {
-                result = Config.ApplyJsonFromFileInfo(new FileInfo((string) args[0]), this);
+                result = Config.ApplyJsonFromFileInfo(new FileInfo((string)args[0]), this);
                 return true;
             }
             if (binder.Name == "ApplyJsonFromFile" && args.Length == 1 && args[0] is FileInfo)
             {
-                result = Config.ApplyJsonFromFileInfo((FileInfo) args[0], this);
+                result = Config.ApplyJsonFromFileInfo((FileInfo)args[0], this);
                 return true;
             }
             if (binder.Name == "Clone")
@@ -131,7 +151,7 @@ namespace JsonConfig
             }
             if (binder.Name == "Exists" && args.Length == 1 && args[0] is string)
             {
-                result = Members.ContainsKey((string) args[0]);
+                result = _members.ContainsKey((string)args[0]);
                 return true;
             }
 
@@ -142,8 +162,25 @@ namespace JsonConfig
 
         public override string ToString()
         {
+            if (_members.Count == 0)
+            {
+                return "";
+            }
             var w = new JsonWriter();
-            return w.Write(Members);
+            //return w.Write(_members);
+            return w.Write(GetMapForOutput(true));
+        }
+
+        private IDictionary<string, object> GetMapForOutput(bool isOutputDefault)
+        {
+            return _members.Where(a => (isOutputDefault || !a.Value.IsDefault))
+                .Select(a => new KeyValuePair<string, object>(a.Key,
+                    (a.Value.Value is ConfigObject)
+                        ? ((ConfigObject) a.Value.Value).GetMapForOutput(isOutputDefault)
+                        : a.Value.Value))
+                .Where(
+                    a => !(a.Value is IDictionary<string, object>) || ((IDictionary<string, object>) a.Value).Count > 0)
+                .ToDictionary(a => a.Key, a => a.Value);
         }
 
         /// <summary>
@@ -154,65 +191,21 @@ namespace JsonConfig
         {
             var w = new JsonWriter();
             w.Settings.PrettyPrint = true;
-            var nonDefaultMembers = GetNonDefaultMembers();
+            var nonDefaultMembers = GetMapForOutput(false);
             return w.Write(nonDefaultMembers);
-        }
-
-        private Dictionary<string, object> GetNonDefaultMembers()
-        {
-            var nonDefaultMembers = new Dictionary<string, object>();
-            foreach (var kvp in Members)
-            {
-                bool isItemDefault;
-                if (IsFromDefaultMap.TryGetValue(kvp.Key, out isItemDefault) && isItemDefault)
-                {
-                    continue;
-                }
-                var configObject = kvp.Value as ConfigObject;
-                if (configObject != null)
-                {
-                    if (configObject.IsDefault)
-                    {
-                        continue;
-                    }
-                    nonDefaultMembers.Add(kvp.Key, configObject.GetNonDefaultMembers());
-                }
-                else
-                {
-                    nonDefaultMembers.Add(kvp.Key, kvp.Value);
-                }
-            }
-            return nonDefaultMembers;
         }
 
         public void ApplyJson(string json)
         {
             var result = Config.ApplyJson(json, this);
             // replace myself's members with the new ones
-            Members = result.Members;
+            _members = result._members;
         }
 
         public static implicit operator ConfigObject(ExpandoObject exp)
         {
             return FromExpando(exp);
         }
-
-        #region casts
-
-        public static implicit operator bool(ConfigObject c)
-        {
-            // we want to test for a member:
-            // if (config.SomeMember) { ... }
-            //
-            // instead of:
-            // if (config.SomeMember != null) { ... }
-
-            // we return always true, because a NullExceptionPreventer is returned when member
-            // does not exist
-            return true;
-        }
-
-        #endregion
 
         #region ctor
 
@@ -222,7 +215,7 @@ namespace JsonConfig
         /// <param name="isDefault">Indicates whether the config object is the default config.</param>
         public ConfigObject(bool isDefault)
         {
-            IsDefault = isDefault;
+            _isDefault = isDefault;
         }
 
         /// <summary>
@@ -239,33 +232,33 @@ namespace JsonConfig
 
         public void Add(KeyValuePair<string, object> item)
         {
-            Members.Add(item.Key, item.Value);
-            IsFromDefaultMap[item.Key] = IsDefault;
+            _members.TryAdd(item.Key, new ConfigObjectMember(_isDefault, item.Value));
         }
 
         public void Clear()
         {
-            Members.Clear();
+            _members.Clear();
         }
 
         public bool Contains(KeyValuePair<string, object> item)
         {
-            return Members.ContainsKey(item.Key) && Members[item.Key] == item.Value;
+            return _members.ContainsKey(item.Key) && _members[item.Key] == item.Value;
         }
 
         public void CopyTo(KeyValuePair<string, object>[] array, int arrayIndex)
         {
-            ((ICollection<KeyValuePair<string, object>>) Members).CopyTo(array, arrayIndex);
+            ((ICollection<KeyValuePair<string, object>>)_members.ToDictionary(a => a.Key, a => a.Value.Value)).CopyTo(array, arrayIndex);
         }
 
         public bool Remove(KeyValuePair<string, object> item)
         {
-            return Members.Remove(item.Key);
+            ConfigObjectMember dummy;
+            return _members.TryRemove(item.Key, out dummy);
         }
 
         public int Count
         {
-            get { return Members.Count; }
+            get { return _members.Count; }
         }
 
         public bool IsReadOnly
@@ -279,49 +272,77 @@ namespace JsonConfig
 
         public void Add(string key, object value)
         {
-            Members.Add(key, value);
-            IsFromDefaultMap[key] = IsDefault;
+            _members.TryAdd(key, new ConfigObjectMember(_isDefault, value));
         }
 
         public bool ContainsKey(string key)
         {
-            return Members.ContainsKey(key);
+            return _members.ContainsKey(key);
         }
 
         public bool Remove(string key)
         {
-            IsFromDefaultMap.Remove(key);
-            return Members.Remove(key);
+            ConfigObjectMember dummy;
+            return _members.TryRemove(key, out dummy);
         }
 
         public object this[string key]
         {
-            get { return Members[key]; }
+            get
+            {
+                if (ReferenceEquals(key, null))
+                {
+                    throw new ArgumentNullException("key");
+                }
+                ConfigObjectMember member;
+                if (_members.TryGetValue(key, out member))
+                {
+                    return _members[key].Value;
+                }
+                else
+                {
+                    throw new KeyNotFoundException();
+                }
+            }
             set
             {
-                Members[key] = value;
-                IsFromDefaultMap[key] = IsDefault;
+                _members[key] = new ConfigObjectMember(_isDefault, value);
             }
         }
 
         public ICollection<string> Keys
         {
-            get { return Members.Keys; }
+            get { return _members.Keys; }
         }
 
         public ICollection<object> Values
         {
-            get { return Members.Values; }
+            get { return _members.Values.Select(a => a.Value).ToArray(); }
+        }
+
+        public bool IsDefault
+        {
+            get { return _isDefault; }
         }
 
         public bool TryGetValue(string key, out object value)
         {
-            return Members.TryGetValue(key, out value);
+            ConfigObjectMember configObjectMember;
+            if (_members.TryGetValue(key, out configObjectMember))
+            {
+                value = configObjectMember.Value;
+                return true;
+            }
+            else
+            {
+                value = null;
+                return false;
+            }
         }
 
         #region ICloneable implementation
 
-        private object Clone()
+        public object Clone()
         {
             return Merger.Merge(new ConfigObject(), this);
         }
@@ -348,87 +369,232 @@ namespace JsonConfig
         }
 
         #endregion
-    }
 
-    /// <summary>
-    ///     Null exception preventer. This allows for hassle-free usage of configuration values that are not
-    ///     defined in the config file. I.e. we can do Config.Scope.This.Field.Does.Not.Exist.Ever, and it will
-    ///     not throw an NullPointer exception, but return te NullExceptionPreventer object instead.
-    ///     The NullExceptionPreventer can be cast to everything, and will then return default/empty value of
-    ///     that datatype.
-    /// </summary>
-    public class NullExceptionPreventer : DynamicObject
-    {
-        // all member access to a NullExceptionPreventer will return a new NullExceptionPreventer
-        // this allows for infinite nesting levels: var s = Obj1.foo.bar.bla.blubb; is perfectly valid
-        public override bool TryGetMember(GetMemberBinder binder, out object result)
+        public void Set(string key, object value, bool isFromDefaultConfig)
         {
-            result = new NullExceptionPreventer();
-            return true;
+            _members[key] = new ConfigObjectMember(isFromDefaultConfig, value);
         }
 
         // Add all kinds of datatypes we can cast it to, and return default values
         // cast to string will be null
-        public static implicit operator string(NullExceptionPreventer nep)
+        public static implicit operator string(ConfigObject nep)
         {
-            return null;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return "";
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public override string ToString()
+        public static implicit operator string[](ConfigObject nep)
         {
-            return null;
-        }
-
-        public static implicit operator string[](NullExceptionPreventer nep)
-        {
-            return new string[] {};
+            if (nep == null || nep._members.Count == 0)
+            {
+                return new string[] { };
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
         // cast to bool will always be false
-        public static implicit operator bool(NullExceptionPreventer nep)
+        public static implicit operator bool(ConfigObject nep)
         {
-            return false;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return false;
+            }
+            else
+            {
+                return true;
+            }
         }
 
-        public static implicit operator bool[](NullExceptionPreventer nep)
+        public static implicit operator bool[](ConfigObject nep)
         {
-            return new bool[] {};
+            if (nep == null || nep._members.Count == 0)
+            {
+                return new bool[] { };
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator int[](NullExceptionPreventer nep)
+        public static implicit operator int[](ConfigObject nep)
         {
-            return new int[] {};
+            if (nep == null || nep._members.Count == 0)
+            {
+                return new int[] { };
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator long[](NullExceptionPreventer nep)
+        public static implicit operator long[](ConfigObject nep)
         {
-            return new long[] {};
+            if (nep == null || nep._members.Count == 0)
+            {
+                return new long[] { };
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator int(NullExceptionPreventer nep)
+        public static implicit operator int(ConfigObject nep)
         {
-            return 0;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return 0;
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator long(NullExceptionPreventer nep)
+        public static implicit operator long(ConfigObject nep)
         {
-            return 0;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return 0;
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
         // nullable types always return null
-        public static implicit operator bool?(NullExceptionPreventer nep)
+        public static implicit operator bool?(ConfigObject nep)
         {
-            return null;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return null;
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator int?(NullExceptionPreventer nep)
+        public static implicit operator int?(ConfigObject nep)
         {
-            return null;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return null;
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
 
-        public static implicit operator long?(NullExceptionPreventer nep)
+        public static implicit operator long?(ConfigObject nep)
         {
-            return null;
+            if (nep == null || nep._members.Count == 0)
+            {
+                return null;
+            }
+            else
+            {
+                throw new InvalidCastException();
+            }
         }
     }
+
+    ///// <summary>
+    /////     Null exception preventer. This allows for hassle-free usage of configuration values that are not
+    /////     defined in the config file. I.e. we can do Config.Scope.This.Field.Does.Not.Exist.Ever, and it will
+    /////     not throw an NullPointer exception, but return te NullExceptionPreventer object instead.
+    /////     The NullExceptionPreventer can be cast to everything, and will then return default/empty value of
+    /////     that datatype.
+    ///// </summary>
+    //public class NullExceptionPreventer : DynamicObject
+    //{
+    //    public NullExceptionPreventer()
+    //    {
+            
+    //    }
+    //    // all member access to a NullExceptionPreventer will return a new NullExceptionPreventer
+    //    // this allows for infinite nesting levels: var s = Obj1.foo.bar.bla.blubb; is perfectly valid
+    //    public override bool TryGetMember(GetMemberBinder binder, out object result)
+    //    {
+    //        result = new NullExceptionPreventer();
+    //        return true;
+    //    }
+
+    //    // Add all kinds of datatypes we can cast it to, and return default values
+    //    // cast to string will be null
+    //    public static implicit operator string(NullExceptionPreventer nep)
+    //    {
+    //        return "";
+    //    }
+
+    //    public override string ToString()
+    //    {
+    //        return "";
+    //    }
+
+    //    public static implicit operator string[](NullExceptionPreventer nep)
+    //    {
+    //        return new string[] { };
+    //    }
+
+    //    // cast to bool will always be false
+    //    public static implicit operator bool(NullExceptionPreventer nep)
+    //    {
+    //        return false;
+    //    }
+
+    //    public static implicit operator bool[](NullExceptionPreventer nep)
+    //    {
+    //        return new bool[] { };
+    //    }
+
+    //    public static implicit operator int[](NullExceptionPreventer nep)
+    //    {
+    //        return new int[] { };
+    //    }
+
+    //    public static implicit operator long[](NullExceptionPreventer nep)
+    //    {
+    //        return new long[] { };
+    //    }
+
+    //    public static implicit operator int(NullExceptionPreventer nep)
+    //    {
+    //        return 0;
+    //    }
+
+    //    public static implicit operator long(NullExceptionPreventer nep)
+    //    {
+    //        return 0;
+    //    }
+
+    //    // nullable types always return null
+    //    public static implicit operator bool?(NullExceptionPreventer nep)
+    //    {
+    //        return null;
+    //    }
+
+    //    public static implicit operator int?(NullExceptionPreventer nep)
+    //    {
+    //        return null;
+    //    }
+
+    //    public static implicit operator long?(NullExceptionPreventer nep)
+    //    {
+    //        return null;
+    //    }
+    //}
 }

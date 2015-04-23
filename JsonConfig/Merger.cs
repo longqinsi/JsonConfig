@@ -48,15 +48,26 @@ namespace JsonConfig
             if (obj1 is ExpandoObject) obj1 = ConfigObject.FromExpando(obj1);
             if (obj2 is ExpandoObject) obj2 = ConfigObject.FromExpando(obj2);
 
-            // if both objects are NullExceptionPreventer, return a ConfigObject so the
+            var isObj1Default = ((obj1 is ConfigObject) && ((ConfigObject)obj1).IsDefault);
+            var isObj2Default = ((obj2 is ConfigObject) && ((ConfigObject)obj2).IsDefault);
+
+            var isObj1EmptyConfigObject = obj1 is ConfigObject && ((ConfigObject) obj1).Count == 0;
+            var isObj2EmptyConfigObject = obj2 is ConfigObject && ((ConfigObject) obj2).Count == 0;
+
+            // if both objects are empty ConfigObject, return a ConfigObject so the
             // user gets an "Empty" ConfigObject
-            if (obj1 is NullExceptionPreventer && obj2 is NullExceptionPreventer)
-                return new ConfigObject();
+            if (isObj1EmptyConfigObject && isObj2EmptyConfigObject)
+                return new ConfigObject(isObj1Default);
 
             // if any object is of NullExceptionPreventer, the other object gets precedence / overruling
-            if (obj1 is NullExceptionPreventer && obj2 is ConfigObject)
-                return obj2;
-            if (obj2 is NullExceptionPreventer && obj1 is ConfigObject)
+            if (isObj1EmptyConfigObject && obj2 is ConfigObject)
+            {
+                if (isObj1Default == isObj2Default)
+                {
+                    return obj2;
+                }
+            }
+            if (isObj2EmptyConfigObject && obj1 is ConfigObject)
                 return obj1;
 
             // handle what happens if one of the args is null
@@ -73,24 +84,20 @@ namespace JsonConfig
             var dict1 = (IDictionary<string, object>) (obj1);
             var dict2 = (IDictionary<string, object>) (obj2);
 
-            var isObj1Default = ((obj1 is ConfigObject) && ((ConfigObject) obj1).IsDefault);
-            var isObj2Default = ((obj2 is ConfigObject) && ((ConfigObject) obj2).IsDefault);
 
             var result = new ConfigObject();
-            var rdict = (IDictionary<string, object>) result;
+            //var rdict = (IDictionary<string, object>) result;
 
             // first, copy all non colliding keys over
             foreach (var kvp in dict1)
                 if (!dict2.Keys.Contains(kvp.Key))
                 {
-                    rdict.Add(kvp.Key, kvp.Value);
-                    result.IsFromDefaultMap[kvp.Key] = isObj1Default;
+                    result.Set(kvp.Key, kvp.Value, isObj1Default);
                 }
             foreach (var kvp in dict2)
                 if (!dict1.Keys.Contains(kvp.Key))
                 {
-                    rdict.Add(kvp.Key, kvp.Value);
-                    result.IsFromDefaultMap[kvp.Key] = isObj2Default;
+                    result.Set(kvp.Key, kvp.Value, isObj2Default);
                 }
 
             // now handle the colliding keys	
@@ -103,44 +110,65 @@ namespace JsonConfig
                 var kvp2 = new KeyValuePair<string, object>(kvp1.Key, dict2[kvp1.Key]);
 
                 // some shortcut variables to make code more readable		
+                object valueToAdd = null;
                 var key = kvp1.Key;
                 var value1 = kvp1.Value;
                 var value2 = kvp2.Value;
-                var type1 = value1.GetType();
-                var type2 = value2.GetType();
-
-                // check if both are same type
-                if (type1 != type2)
-                    throw new TypeMissmatchException();
-
-                if (value1 is ConfigObject[])
+                if (ReferenceEquals(null, value1))
                 {
-                    rdict[key] = CollectionMerge(value1, value2);
-                    /*var d1 = val1 as IDictionary<string, object>;
-					var d2 = val2 as IDictionary<string, object>;
-					rdict[key] = CollectionMerge (val1, val2); */
+                    valueToAdd = value2;
                 }
-                else if (value1 is ConfigObject)
+                else if (ReferenceEquals(null, value2))
                 {
-                    rdict[key] = Merge(value1, value2);
-                }
-                else if (value1 is string)
-                {
-                    rdict[key] = value1;
-                }
-                else if (value1 is IEnumerable)
-                {
-                    rdict[key] = CollectionMerge(value1, value2);
+                    valueToAdd = value1;
                 }
                 else
-                {
-                    rdict[key] = value1;
-                }
+                { 
+                    var type1 = value1.GetType();
+                    var type2 = value2.GetType();
+                    if (type1.IsArray && ((Array) value1).Length == 0)
+                    {
+                        valueToAdd = value2;
+                    }
+                    else if (type2.IsArray && ((Array) value2).Length == 0)
+                    {
+                        valueToAdd = value1;
+                    }
+                    else
+                    {
 
-                result.IsFromDefaultMap[key] = isObj1Default;
-                //else if (kvp.Value.GetType ().IsByRef) {
-                // recursively merge it	
-                //}
+                        // check if both are same type
+                        if (type1 != type2)
+                            throw new TypeMissmatchException();
+
+
+                        if (value1 is ConfigObject[])
+                        {
+                            valueToAdd = CollectionMerge(value1, value2);
+                        }
+                        else if (value1 is ConfigObject)
+                        {
+                            valueToAdd = Merge(value1, value2);
+                        }
+                        else if (value1 is string)
+                        {
+                            valueToAdd = value1;
+                        }
+                        else if (value1 is IEnumerable)
+                        {
+                            valueToAdd = CollectionMerge(value1, value2);
+                        }
+                        else
+                        {
+                            valueToAdd = value1;
+                        }
+                    }
+                }
+                if (ReferenceEquals(null, valueToAdd))
+                {
+                    valueToAdd = new ConfigObject(isObj1Default);
+                }
+                result.Set(key, valueToAdd, isObj1Default);
             }
             return result;
         }

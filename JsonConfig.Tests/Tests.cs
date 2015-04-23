@@ -1,5 +1,9 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
+using JsonFx.Json;
 using NUnit.Framework;
 
 namespace JsonConfig.Tests
@@ -14,7 +18,9 @@ namespace JsonConfig.Tests
             dynamic merged = Merger.Merge(parsed.Fruit1, parsed.Fruit2);
 
             var fruitList = merged.Fruit as ICollection<string>;
+            // ReSharper disable PossibleNullReferenceException
             Assert.AreEqual(6, fruitList.Count);
+            // ReSharper restore PossibleNullReferenceException
             // apple must be in it 2 times, since array merging is NOT SET merging!
             Assert.AreEqual(fruitList.Count(f => f == "apple"), 2);
             Assert.That(fruitList.Contains("coconut"));
@@ -27,7 +33,9 @@ namespace JsonConfig.Tests
             dynamic merged = Merger.Merge(parsed.Fruit1, parsed.EmptyFruit);
 
             var fruitList = merged.Fruit as ICollection<string>;
+            // ReSharper disable PossibleNullReferenceException
             Assert.AreEqual(3, fruitList.Count);
+            // ReSharper restore PossibleNullReferenceException
             Assert.That(fruitList.Contains("apple"));
             Assert.That(fruitList.Contains("banana"));
             Assert.That(fruitList.Contains("melon"));
@@ -39,8 +47,8 @@ namespace JsonConfig.Tests
             dynamic parsed = GetUUT("Arrays");
             dynamic merged = Merger.Merge(parsed.Fruit1, parsed.Fruit2);
 
-            Assert.That(merged.field.not.exist.ToString() == null);
-            Assert.That(string.IsNullOrEmpty(merged.thisfield.does.just.not.exist) == true);
+            Assert.That(string.IsNullOrEmpty(merged.field.not.exist.ToString()));
+            Assert.That(string.IsNullOrEmpty(merged.thisfield.does.just.not.exist));
         }
 
         [Test]
@@ -104,19 +112,19 @@ namespace JsonConfig.Tests
             dynamic modules = GetUUT("EnabledModules");
 
             // method one : use an object with each module name as key, and value true/false
-            dynamic modules_object = modules.EnabledModulesObject;
-            Assert.AreNotEqual(null, modules_object.Module1);
-            Assert.AreNotEqual(null, modules_object.Module2);
+            dynamic modulesObject = modules.EnabledModulesObject;
+            Assert.AreNotEqual(null, modulesObject.Module1);
+            Assert.AreNotEqual(null, modulesObject.Module2);
 
-            Assert.That(modules_object.Module1 == true);
-            Assert.That(!modules_object.Module1 == false);
+            Assert.That(modulesObject.Module1 == true);
+            Assert.That(!modulesObject.Module1 == false);
 
-            Assert.That(modules_object.Module2 == false);
+            Assert.That(modulesObject.Module2 == false);
 
             // tricky part: NonExistantModule is not defined in the json but should be false anyways
-            Assert.That(modules_object.NonExistantModule == false);
-            Assert.That(!modules_object.NonExistantModule == true);
-            Assert.That(modules_object.NonExistantModule.Nested.Field.That.Doesnt.Exist == false);
+            Assert.That(modulesObject.NonExistantModule == false);
+            Assert.That(!modulesObject.NonExistantModule == true);
+            Assert.That(modulesObject.NonExistantModule.Nested.Field.That.Doesnt.Exist == false);
         }
 
         [Test]
@@ -126,15 +134,21 @@ namespace JsonConfig.Tests
             dynamic merged = Merger.Merge(parsed.UserConfig, parsed.FactoryDefault);
 
             var interfaces = merged.Interfaces as ICollection<string>;
+            // ReSharper disable AssignNullToNotNullAttribute
             Assert.AreEqual(3, interfaces.Count());
+            // ReSharper restore AssignNullToNotNullAttribute
 
             var zones = merged.Zones as ICollection<dynamic>;
 
+            // ReSharper disable AssignNullToNotNullAttribute
             var loopback = zones.Count(d => d.Name == "Loopback");
+            // ReSharper restore AssignNullToNotNullAttribute
             Assert.AreEqual(1, loopback);
 
             // one portmapping is present at least
-            var intzone = zones.Where(d => d.Name == "Internal").First();
+            // ReSharper disable AssignNullToNotNullAttribute
+            var intzone = zones.First(d => d.Name == "Internal");
+            // ReSharper restore AssignNullToNotNullAttribute
             Assert.That(intzone.PortMapping != null);
             Assert.Greater(intzone.PortMapping.Length, 0);
         }
@@ -152,15 +166,41 @@ namespace JsonConfig.Tests
             var stars = merged.Rating.Stars as ICollection<double>;
             Assert.IsNotNull(stars);
 
+            // ReSharper disable CompareOfFloatsByEqualityOperator
             Assert.That(stars.Sum(d => d) == 12.5);
+            // ReSharper restore CompareOfFloatsByEqualityOperator
         }
 
         [Test]
         public void SaveTest()
         {
-
+            var userConfigFileName = Assembly.GetExecutingAssembly().GetName().Name + Config.DefaultEnding;
+            if (File.Exists(userConfigFileName))
+            {
+                File.Delete(userConfigFileName);
+            }
             Config.Local.User.Name = "yqy";
             Config.Local.Save();
+            dynamic result;
+            using (var sr = new StreamReader(userConfigFileName))
+            {
+                JsonReader reader = new JsonReader();
+                result = reader.Read(sr);
+                Assert.AreEqual(result.Name, "yqy");
+            }
+            result.Age = 20;
+            using (var sw = new StreamWriter(userConfigFileName))
+            {
+                JsonWriter writer = new JsonWriter();
+                writer.Settings.PrettyPrint = true;
+                Config.Local.SuspendWatchUserConfig();
+                writer.Write(result, sw);
+                Config.Local.ResumeWatchUserConfig();
+            }
+            Thread.Sleep(1000);
+            Assert.IsInstanceOf<int>(Config.Local.User.Age);
+            Config.Local.User.Dragon.Long = 20;
+            Assert.AreEqual(Config.Local.User.Age, 20);
         }
     }
 }

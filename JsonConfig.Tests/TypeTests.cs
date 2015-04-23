@@ -10,109 +10,109 @@ using System.Linq;
 
 namespace JsonConfig.Tests
 {
-	[TestFixture()]
-	public class TypeTests : BaseTest
-	{
-		[Test()]
-		public void NestedExpandoConvertToConfigObject()
-		{
-			dynamic e = new ExpandoObject ();
-			e.Foo = "bar";
-			e.X = 1;
-			dynamic f = new ExpandoObject ();
-			f.Foo = "bar";
-			f.X = 1;
+    [TestFixture()]
+    public class TypeTests : BaseTest
+    {
+        [Test()]
+        public void NestedExpandoConvertToConfigObject()
+        {
+            dynamic e = new ExpandoObject ();
+            e.Foo = "bar";
+            e.X = 1;
+            dynamic f = new ExpandoObject ();
+            f.Foo = "bar";
+            f.X = 1;
 
-			e.Nested = f;
+            e.Nested = f;
 
-			dynamic c = ConfigObject.FromExpando (e);
+            dynamic c = ConfigObject.FromExpando (e);
 
-			Assert.IsInstanceOfType (typeof (ConfigObject), c);
-			Assert.IsInstanceOfType (typeof (ConfigObject), c.Nested);
-			Assert.AreEqual ("bar", c.Foo);
-			Assert.AreEqual (1, c.X);
+            Assert.IsInstanceOfType (typeof (ConfigObject), c);
+            Assert.IsInstanceOfType (typeof (ConfigObject), c.Nested);
+            Assert.AreEqual ("bar", c.Foo);
+            Assert.AreEqual (1, c.X);
 
-			Assert.AreEqual ("bar", c.Nested.Foo);
-			Assert.AreEqual (1, c.Nested.X);
-		}
-		[Test]
-		public void DeeplyNestedExpandoConvert ()
-		{
-			// can't use GetUUT here since this will already involve conversion
-			var name = "Types";
-			var jsonTests = Assembly.GetExecutingAssembly ().GetManifestResourceStream ("JsonConfig.Tests.JSON." + name + ".json");
-			var sReader = new StreamReader (jsonTests);
-			var jReader = new JsonFx.Json.JsonReader ();
-			dynamic parsed = jReader.Read (sReader.ReadToEnd ());
+            Assert.AreEqual ("bar", c.Nested.Foo);
+            Assert.AreEqual (1, c.Nested.X);
+        }
+        [Test]
+        public void DeeplyNestedExpandoConvert ()
+        {
+            // can't use GetUUT here since this will already involve conversion
+            var name = "Types";
+            var jsonTests = Assembly.GetExecutingAssembly ().GetManifestResourceStream ("JsonConfig.Tests.JSON." + name + ".json");
+            var sReader = new StreamReader (jsonTests);
+            var jReader = new JsonFx.Json.JsonReader ();
+            dynamic parsed = jReader.Read (sReader.ReadToEnd ());
 
-			dynamic config = ConfigObject.FromExpando (parsed);
+            dynamic config = ConfigObject.FromExpando (parsed);
 
-			Assert.AreEqual ("bar", config.Foo);
-			Assert.AreEqual ("bar", ((ICollection<dynamic>) config.NestedArray).First ().Foo);
-			Assert.AreEqual ("bar", config.DoubleNestedArray[0].One[0].Foo);
+            Assert.AreEqual ("bar", config.Foo);
+            Assert.AreEqual ("bar", ((ICollection<dynamic>) config.NestedArray).First ().Foo);
+            Assert.AreEqual ("bar", config.DoubleNestedArray[0].One[0].Foo);
 
-			Assert.IsInstanceOfType (typeof (ConfigObject[]), config.DoubleNestedArray[0].One);
-			Assert.AreEqual ("bar", config.DoubleNestedArray[0].One[0].Foo);
-			Assert.AreEqual (4, config.DoubleNestedArray[0].One.Length);
+            Assert.IsInstanceOfType (typeof (ConfigObject[]), config.DoubleNestedArray[0].One);
+            Assert.AreEqual ("bar", config.DoubleNestedArray[0].One[0].Foo);
+            Assert.AreEqual (4, config.DoubleNestedArray[0].One.Length);
 
-			Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[0].Foo);
-			Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[3].Foo);
-			Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[3].Foo);
-		}
-		[Test]
-		public void SimpleExpandoToConfigObject ()
-		{
-			dynamic e = new ExpandoObject ();
+            Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[0].Foo);
+            Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[3].Foo);
+            Assert.AreEqual ("bar", config.DoubleNestedArray[1].Two[3].Foo);
+        }
+        [Test]
+        public void SimpleExpandoToConfigObject ()
+        {
+            dynamic e = new ExpandoObject ();
 
-			e.Foo = "bar";
-			e.X = 1;
+            e.Foo = "bar";
+            e.X = 1;
 
-			var c = ConfigObject.FromExpando (e);
+            var c = ConfigObject.FromExpando (e);
 
-			Assert.IsInstanceOfType (typeof(ConfigObject), c);
+            Assert.IsInstanceOfType (typeof(ConfigObject), c);
 
-			Assert.IsInstanceOfType (typeof(string), c.Foo);
-			Assert.AreEqual ("bar", c.Foo);
+            Assert.IsInstanceOfType (typeof(string), c.Foo);
+            Assert.AreEqual ("bar", c.Foo);
 
-			Assert.IsInstanceOfType (typeof(int), c.X);
-			Assert.AreEqual (1, c.X);
-		}
-		[Test]
-		public void CastNonExistantFields ()
-		{
-			int x = Config.Global.User.NonExistant;
-			Assert.AreEqual (0, x);
+            Assert.IsInstanceOfType (typeof(int), c.X);
+            Assert.AreEqual (1, c.X);
+        }
+        [Test]
+        public void CastNonExistantFields ()
+        {
+            int x = Config.Global.User.NonExistant;
+            Assert.AreEqual (0, x);
 
             int[] xarray = Config.Global.User.NonExistant;
-			Assert.AreEqual (0, xarray.Length);
+            Assert.AreEqual (0, xarray.Length);
 
             string[] sarray = Config.Global.User.NonExistant;
-			Assert.AreEqual (0, sarray.Length);
+            Assert.AreEqual (0, sarray.Length);
 
             bool b = Config.Global.User.NonExistant;
-			Assert.AreEqual (false, b);
+            Assert.AreEqual (false, b);
 
             bool? bn = Config.Global.User.NonExistant;
-			Assert.AreEqual (null, bn);
-		}
-		[Test]
-		public void CastConfigObjectToBool ()
-		{
-			// if a ConfigObject has nested members, we wan't to be able to do
-			// a fast check for non null in if statements:
-			//
-			// if (config.SomeMember) { ... }
+            Assert.AreEqual (null, bn);
+        }
+        [Test]
+        public void CastConfigObjectToBool ()
+        {
+            // if a ConfigObject has nested members, we wan't to be able to do
+            // a fast check for non null in if statements:
+            //
+            // if (config.SomeMember) { ... }
 
-			string conf = @"{ SomeMember: { Foo: 42 } }";
-			dynamic c = new ConfigObject();
-			c.ApplyJson(conf);
+            string conf = @"{ SomeMember: { Foo: 42 } }";
+            dynamic c = new ConfigObject();
+            c.ApplyJson(conf);
 
-			bool t = (bool) c.SomeMember;
-			Assert.AreEqual(true, t);
+            bool t = (bool) c.SomeMember;
+            Assert.AreEqual(true, t);
 
-			bool f = (bool) c.NonExistantMember;
-			Assert.AreEqual (f, false);
-		}
-	}
+            bool f = (bool) c.NonExistantMember;
+            Assert.AreEqual (f, false);
+        }
+    }
 }
 
