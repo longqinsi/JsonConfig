@@ -32,32 +32,31 @@ using JsonFx.Json;
 
 namespace JsonConfig
 {
-    public class ConfigObject : DynamicObject, IDictionary<string, object>
+    internal class ConfigObjectMember
     {
-        private class ConfigObjectMember
+        public bool IsDefault
         {
-            public bool IsDefault
-            {
-                get { return _isDefault; }
-            }
+            get { return _isDefault; }
+        }
 
-            public object Value
-            {
-                get { return _value; }
-            }
-
-            private readonly bool _isDefault;
-            private readonly object _value;
-
-            public ConfigObjectMember(bool isDefault, object value)
-            {
-                _isDefault = isDefault;
-                _value = value;
-            }
+        public object Value
+        {
+            get { return _value; }
         }
 
         private readonly bool _isDefault;
-        private volatile ConcurrentDictionary<string, ConfigObjectMember> _members = new ConcurrentDictionary<string, ConfigObjectMember>();
+        private readonly object _value;
+
+        public ConfigObjectMember(bool isDefault, object value)
+        {
+            _isDefault = isDefault;
+            _value = value;
+        }
+    }
+
+    public class ConfigObject : DynamicObject, IDictionary<string, object>
+    {
+        internal volatile ConcurrentDictionary<string, object> _members = new ConcurrentDictionary<string, object>();
 
         #region IEnumerable implementation
 
@@ -72,7 +71,7 @@ namespace JsonConfig
 
         IEnumerator<KeyValuePair<string, object>> IEnumerable<KeyValuePair<string, object>>.GetEnumerator()
         {
-            return _members.ToList().Select(a => new KeyValuePair<string, object>(a.Key, a.Value.Value)).GetEnumerator();
+            return _members.ToList().Select(a => new KeyValuePair<string, object>(a.Key, (a.Value is ConfigObjectMember) ? ((ConfigObjectMember)a.Value).Value : a.Value )).GetEnumerator();
         }
 
         #endregion
@@ -80,7 +79,7 @@ namespace JsonConfig
         public static ConfigObject FromExpando(ExpandoObject e, bool isDefault = false)
         {
             var edict = e as IDictionary<string, object>;
-            var c = new ConfigObject(isDefault);
+            var c = new ConfigObject();
             var cdict = c._members;
 
             // this is not complete. It will, however work for JsonFX ExpandoObjects
@@ -91,7 +90,7 @@ namespace JsonConfig
                 // recursively convert and add ExpandoObjects
                 if (kvp.Value is ExpandoObject)
                 {
-                    cdict.TryAdd(kvp.Key, new ConfigObjectMember(isDefault, FromExpando((ExpandoObject)kvp.Value, isDefault)));
+                    cdict.TryAdd(kvp.Key, FromExpando((ExpandoObject)kvp.Value, isDefault));
                 }
                 else if (kvp.Value is ExpandoObject[])
                 {
@@ -100,7 +99,7 @@ namespace JsonConfig
                     {
                         configObjects.Add(FromExpando(ex, isDefault));
                     }
-                    cdict.TryAdd(kvp.Key, new ConfigObjectMember(isDefault, configObjects.ToArray()));
+                    cdict.TryAdd(kvp.Key, configObjects.ToArray());
                 }
                 else
                 {
@@ -112,22 +111,29 @@ namespace JsonConfig
 
         public override bool TryGetMember(GetMemberBinder binder, out object result)
         {
-            ConfigObjectMember member;
+            object member;
             if (_members.TryGetValue(binder.Name, out member))
             {
-                result = member.Value;
+                result = (member is ConfigObjectMember) ? ((ConfigObjectMember)member).Value : member;
             }
             else
             {
-                result = new ConfigObject(IsDefault);
-                _members[binder.Name] = new ConfigObjectMember(IsDefault, result);
+                result = new ConfigObject();
+                _members[binder.Name] = result;
             }
             return true;
         }
 
         public override bool TrySetMember(SetMemberBinder binder, object value)
         {
-            _members[binder.Name] = new ConfigObjectMember(_isDefault, value);
+            if (value is ConfigObject || value is ConfigObject[])
+            {
+                _members[binder.Name] = value;
+            }
+            else
+            {
+                _members[binder.Name] = new ConfigObjectMember(false, value);
+            }
             return true;
         }
 
@@ -167,19 +173,18 @@ namespace JsonConfig
                 return "";
             }
             var w = new JsonWriter();
-            //return w.Write(_members);
             return w.Write(GetMapForOutput(true));
         }
 
         private IDictionary<string, object> GetMapForOutput(bool isOutputDefault)
         {
-            return _members.Where(a => (isOutputDefault || !a.Value.IsDefault))
+            return _members.Where(a => (isOutputDefault || !(a.Value is ConfigObjectMember) || !((ConfigObjectMember)a.Value).IsDefault))
                 .Select(a => new KeyValuePair<string, object>(a.Key,
-                    (a.Value.Value is ConfigObject)
-                        ? ((ConfigObject) a.Value.Value).GetMapForOutput(isOutputDefault)
-                        : a.Value.Value))
+                    (a.Value is ConfigObject)
+                        ? ((ConfigObject)a.Value).GetMapForOutput(isOutputDefault)
+                        : ((a.Value is ConfigObjectMember) ? ((ConfigObjectMember)a.Value).Value:a.Value)))
                 .Where(
-                    a => !(a.Value is IDictionary<string, object>) || ((IDictionary<string, object>) a.Value).Count > 0)
+                    a => !(a.Value is IDictionary<string, object>) || ((IDictionary<string, object>)a.Value).Count > 0)
                 .ToDictionary(a => a.Key, a => a.Value);
         }
 
@@ -212,19 +217,19 @@ namespace JsonConfig
         /// <summary>
         ///     Create a <see cref="ConfigObject" /> instance.
         /// </summary>
-        /// <param name="isDefault">Indicates whether the config object is the default config.</param>
-        public ConfigObject(bool isDefault)
+        ///// <param name="isDefault">Indicates whether the config object is the default config.</param>
+        public ConfigObject(/*bool isDefault*/)
         {
-            _isDefault = isDefault;
+            //_isDefault = isDefault;
         }
 
-        /// <summary>
-        ///     Create a <see cref="ConfigObject" /> instance.
-        /// </summary>
-        public ConfigObject()
-            : this(false)
-        {
-        }
+        ///// <summary>
+        /////     Create a <see cref="ConfigObject" /> instance.
+        ///// </summary>
+        //public ConfigObject()
+        //    : this(false)
+        //{
+        //}
 
         #endregion
 
@@ -232,7 +237,7 @@ namespace JsonConfig
 
         public void Add(KeyValuePair<string, object> item)
         {
-            _members.TryAdd(item.Key, new ConfigObjectMember(_isDefault, item.Value));
+            _members.TryAdd(item.Key, new ConfigObjectMember(false, item.Value));
         }
 
         public void Clear()
@@ -247,12 +252,12 @@ namespace JsonConfig
 
         public void CopyTo(KeyValuePair<string, object>[] array, int arrayIndex)
         {
-            ((ICollection<KeyValuePair<string, object>>)_members.ToDictionary(a => a.Key, a => a.Value.Value)).CopyTo(array, arrayIndex);
+            ((ICollection<KeyValuePair<string, object>>)_members.ToDictionary(a => a.Key, a => (a.Value is ConfigObjectMember) ? ((ConfigObjectMember)a.Value).Value : a.Value)).CopyTo(array, arrayIndex);
         }
 
         public bool Remove(KeyValuePair<string, object> item)
         {
-            ConfigObjectMember dummy;
+            object dummy;
             return _members.TryRemove(item.Key, out dummy);
         }
 
@@ -272,7 +277,7 @@ namespace JsonConfig
 
         public void Add(string key, object value)
         {
-            _members.TryAdd(key, new ConfigObjectMember(_isDefault, value));
+            _members.TryAdd(key, new ConfigObjectMember(false, value));
         }
 
         public bool ContainsKey(string key)
@@ -282,7 +287,7 @@ namespace JsonConfig
 
         public bool Remove(string key)
         {
-            ConfigObjectMember dummy;
+            object dummy;
             return _members.TryRemove(key, out dummy);
         }
 
@@ -294,10 +299,10 @@ namespace JsonConfig
                 {
                     throw new ArgumentNullException("key");
                 }
-                ConfigObjectMember member;
+                object member;
                 if (_members.TryGetValue(key, out member))
                 {
-                    return _members[key].Value;
+                    return (member is ConfigObjectMember) ? ((ConfigObjectMember)member).Value : member;
                 }
                 else
                 {
@@ -306,7 +311,7 @@ namespace JsonConfig
             }
             set
             {
-                _members[key] = new ConfigObjectMember(_isDefault, value);
+                _members[key] = new ConfigObjectMember(false, value);
             }
         }
 
@@ -317,20 +322,15 @@ namespace JsonConfig
 
         public ICollection<object> Values
         {
-            get { return _members.Values.Select(a => a.Value).ToArray(); }
-        }
-
-        public bool IsDefault
-        {
-            get { return _isDefault; }
+            get { return _members.Values.Select(a => (a is ConfigObjectMember) ? ((ConfigObjectMember)a).Value : a).ToArray(); }
         }
 
         public bool TryGetValue(string key, out object value)
         {
-            ConfigObjectMember configObjectMember;
-            if (_members.TryGetValue(key, out configObjectMember))
+            object member;
+            if (_members.TryGetValue(key, out member))
             {
-                value = configObjectMember.Value;
+                value = (member is ConfigObjectMember) ? ((ConfigObjectMember)member).Value : member;
                 return true;
             }
             else
@@ -372,7 +372,15 @@ namespace JsonConfig
 
         public void Set(string key, object value, bool isFromDefaultConfig)
         {
-            _members[key] = new ConfigObjectMember(isFromDefaultConfig, value);
+            if (value is ConfigObject || value is ConfigObject[])
+            {
+                _members[key] = value;
+            }
+            else
+            {
+                _members[key] = new ConfigObjectMember(isFromDefaultConfig, value);
+                
+            }
         }
 
         // Add all kinds of datatypes we can cast it to, and return default values
@@ -523,7 +531,7 @@ namespace JsonConfig
     //{
     //    public NullExceptionPreventer()
     //    {
-            
+
     //    }
     //    // all member access to a NullExceptionPreventer will return a new NullExceptionPreventer
     //    // this allows for infinite nesting levels: var s = Obj1.foo.bar.bla.blubb; is perfectly valid

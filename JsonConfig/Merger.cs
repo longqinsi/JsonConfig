@@ -48,8 +48,7 @@ namespace JsonConfig
             if (obj1 is ExpandoObject) obj1 = ConfigObject.FromExpando(obj1);
             if (obj2 is ExpandoObject) obj2 = ConfigObject.FromExpando(obj2);
 
-            var isObj1Default = ((obj1 is ConfigObject) && ((ConfigObject)obj1).IsDefault);
-            var isObj2Default = ((obj2 is ConfigObject) && ((ConfigObject)obj2).IsDefault);
+            var isObj1Default = ((obj1 is ConfigObjectMember) && ((ConfigObjectMember)obj1).IsDefault);
 
             var isObj1EmptyConfigObject = obj1 is ConfigObject && ((ConfigObject) obj1).Count == 0;
             var isObj2EmptyConfigObject = obj2 is ConfigObject && ((ConfigObject) obj2).Count == 0;
@@ -57,16 +56,16 @@ namespace JsonConfig
             // if both objects are empty ConfigObject, return a ConfigObject so the
             // user gets an "Empty" ConfigObject
             if (isObj1EmptyConfigObject && isObj2EmptyConfigObject)
-                return new ConfigObject(isObj1Default);
+                return new ConfigObject(/*isObj1Default*/);
 
             // if any object is of NullExceptionPreventer, the other object gets precedence / overruling
-            if (isObj1EmptyConfigObject && obj2 is ConfigObject)
-            {
-                if (isObj1Default == isObj2Default)
-                {
-                    return obj2;
-                }
-            }
+            //if (isObj1EmptyConfigObject && obj2 is ConfigObject)
+            //{
+            //    if (isObj1Default == isObj2Default)
+            //    {
+            //        return obj2;
+            //    }
+            //}
             if (isObj2EmptyConfigObject && obj1 is ConfigObject)
                 return obj1;
 
@@ -92,12 +91,30 @@ namespace JsonConfig
             foreach (var kvp in dict1)
                 if (!dict2.Keys.Contains(kvp.Key))
                 {
-                    result.Set(kvp.Key, kvp.Value, isObj1Default);
+                    bool isDefault = false;
+                    if (obj1 is ConfigObject)
+                    {
+                        object member;
+                        if (((ConfigObject)obj1)._members.TryGetValue(kvp.Key, out member) && member is ConfigObjectMember && ((ConfigObjectMember)member).IsDefault)
+                        {
+                            isDefault = true;
+                        }
+                    }
+                    result.Set(kvp.Key, kvp.Value, isDefault);
                 }
             foreach (var kvp in dict2)
                 if (!dict1.Keys.Contains(kvp.Key))
                 {
-                    result.Set(kvp.Key, kvp.Value, isObj2Default);
+                    bool isDefault = false;
+                    if (obj2 is ConfigObject)
+                    {
+                        object member;
+                        if (((ConfigObject)obj2)._members.TryGetValue(kvp.Key, out member) && member is ConfigObjectMember && ((ConfigObjectMember)member).IsDefault)
+                        {
+                            isDefault = true;
+                        }
+                    }
+                    result.Set(kvp.Key, kvp.Value, isDefault);
                 }
 
             // now handle the colliding keys	
@@ -166,9 +183,19 @@ namespace JsonConfig
                 }
                 if (ReferenceEquals(null, valueToAdd))
                 {
-                    valueToAdd = new ConfigObject(isObj1Default);
+                    valueToAdd = new ConfigObject();
                 }
-                result.Set(key, valueToAdd, isObj1Default);
+
+                bool isDefault = false;
+                if (obj1 is ConfigObject)
+                {
+                    object member;
+                    if (((ConfigObject)obj1)._members.TryGetValue(key, out member) && member is ConfigObjectMember && ((ConfigObjectMember)member).IsDefault)
+                    {
+                        isDefault = true;
+                    }
+                }
+                result.Set(key, valueToAdd, isDefault);
             }
             return result;
         }

@@ -49,10 +49,12 @@ namespace JsonConfig
         }
         public delegate void UserConfigFileChangedHandler();
 
+        private static Config _global = new Config();
+
         /// <summary>
         ///     Get the global <see cref="Config" /> instance of the current appdomain.
         /// </summary>
-        public static readonly Config Global = new Config();
+        public static Config Global { get { return _global; } }
 
         private static readonly ConcurrentDictionary<Assembly, Config> Cache =
             new ConcurrentDictionary<Assembly, Config>();
@@ -480,7 +482,7 @@ namespace JsonConfig
         {
             var dconfJson = ScanForDefaultConfig(assembly);
             if (string.IsNullOrWhiteSpace(dconfJson))
-                return new ConfigObject(true);
+                return new ConfigObject();
             return ParseJson(dconfJson, true);
         }
 
@@ -516,6 +518,19 @@ namespace JsonConfig
                 return defaultJson;
             }
             return "";
+        }
+
+        internal static void ResetLocal()
+        {
+            var callingAssembly = Assembly.GetCallingAssembly();
+            Config tempConfig;
+            Cache.TryRemove(callingAssembly, out tempConfig);
+            GetConfig(callingAssembly);
+        }
+
+        internal static void ResetGlobal()
+        {
+            _global = new Config();
         }
     }
 }

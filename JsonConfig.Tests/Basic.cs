@@ -24,6 +24,7 @@ namespace JsonConfig.Tests
 		[SetUp]
 		public void SetUp ()
 		{
+            Config.ResetLocal();
 		}
 		[TearDown]
 		public void TearDown ()

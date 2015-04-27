@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -179,28 +180,75 @@ namespace JsonConfig.Tests
             {
                 File.Delete(userConfigFileName);
             }
-            Config.Local.User.Name = "yqy";
-            Config.Local.Save();
-            dynamic result;
-            using (var sr = new StreamReader(userConfigFileName))
+            try
             {
-                JsonReader reader = new JsonReader();
-                result = reader.Read(sr);
-                Assert.AreEqual(result.Name, "yqy");
+                Assert.AreEqual(Config.Local.User.Contact.Telephone, "12345678");
+                Config.Local.User.Contact.Telephone = "13388888888";
+                Config.Local.User.Name = "yqy";
+                Config.Local.Save();
+                dynamic result;
+                using (var sr = new StreamReader(userConfigFileName))
+                {
+                    JsonReader reader = new JsonReader();
+                    result = reader.Read(sr);
+                    Assert.AreEqual(result.Name, "yqy");
+                    Assert.AreEqual(result.Contact.Telephone, "13388888888");
+                }
+                result.Age = 20;
+                result.Contact.Email = "abc@abc.net";
+                using (var sw = new StreamWriter(userConfigFileName))
+                {
+                    JsonWriter writer = new JsonWriter();
+                    writer.Settings.PrettyPrint = true;
+                    Config.Local.SuspendWatchUserConfig();
+                    writer.Write(result, sw);
+                    Config.Local.ResumeWatchUserConfig();
+                }
+                Thread.Sleep(1000);
+                Assert.IsInstanceOf<int>(Config.Local.User.Age);
+                Config.Local.User.Dragon.Long = 20;
+                Assert.AreEqual(Config.Local.User.Age, 20);
+                Assert.IsInstanceOf<string>(Config.Local.User.Contact.Email);
+                Assert.AreEqual(Config.Local.User.Contact.Email, "abc@abc.net");
             }
-            result.Age = 20;
-            using (var sw = new StreamWriter(userConfigFileName))
+            finally
             {
-                JsonWriter writer = new JsonWriter();
-                writer.Settings.PrettyPrint = true;
-                Config.Local.SuspendWatchUserConfig();
-                writer.Write(result, sw);
-                Config.Local.ResumeWatchUserConfig();
+                if (File.Exists(userConfigFileName))
+                {
+                    File.Delete(userConfigFileName);
+                }
             }
-            Thread.Sleep(1000);
-            Assert.IsInstanceOf<int>(Config.Local.User.Age);
-            Config.Local.User.Dragon.Long = 20;
-            Assert.AreEqual(Config.Local.User.Age, 20);
+        }
+
+        [Test]
+        [ExpectedException(typeof(Microsoft.CSharp.RuntimeBinder.RuntimeBinderException))]
+        public void DefaultConfigShouldNotBeSavedToUserConfigFileTest()
+        {
+            var userConfigFileName = Assembly.GetExecutingAssembly().GetName().Name + Config.DefaultEnding;
+            if (File.Exists(userConfigFileName))
+            {
+                File.Delete(userConfigFileName);
+            }
+            try
+            {
+                Config.Local.User.Contact.Telephone = "13388888888";
+                Config.Local.User.Name = "yqy";
+                Config.Local.Save();
+                using (var sr = new StreamReader(userConfigFileName))
+                {
+                    JsonReader reader = new JsonReader();
+                    dynamic result = reader.Read(sr);
+                    var country = result.Contact.Country;
+                }
+
+            }
+            finally
+            {
+                if (File.Exists(userConfigFileName))
+                {
+                    File.Delete(userConfigFileName);
+                }
+            }
         }
     }
 }
